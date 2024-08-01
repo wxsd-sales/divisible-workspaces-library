@@ -3,14 +3,12 @@
 
 # Divisible Workspaces Library
 
-The Divisible Workspace (DWS) Macro Library is a suite of tools provides commands and a state management features for handling combine and divide use cases for Cisco Collaboration Workspaces. 
+The Divisible Workspaces (DWS) Macro Library is a suite of tools which provides commands and a state management features for handling common requirements for divisbile workspaces built using Cisco RoomOS Collaboration Devices.
 
 
 ## Overview
 
-This library aims to provide tools specific to combine and divide use cases for Cisco Collaboration Devices.
-
-Here are some of the features:
+This library aims to provide tools specific to divisbile workspaces for Cisco Collaboration RoomOS Devices. Currently the following features are available.
 
 * Touch Panel Lock / Unlock:
 
@@ -22,7 +20,7 @@ Here are some of the features:
     DWS.Command.LockPanel()
     
     // Unlock the Touch Panel
-    DWS.Command.LockPanel()
+    DWS.Command.UnlockPanel()
     ```
 * Persistent Do Not Disturb:
 
@@ -49,20 +47,113 @@ Here are some of the features:
     DWS.Command.UnmuteEthernetMic('myStream')
     ```
 
+* Request External Codec Status Check:
 
-### Flow Diagram
+    Request a status from other Codecs based on their role name:
+     ```javascript
+    import DWS from './DWS_Lib';
+    import DWS from './DWS_Config';
 
-```mermaid
-flowchart TD
-    A[Import DWS Library] --> B{State Management\nor Static Methods}
-    B -->|State Management| C[Setup Config]
-    B -->|Static Methods| D[DWS.Command.LockPanel]
-    C -->E[Recover Previous State]
-    E -->F{Previcous State Recovered}
-    F -->|Yes| G[Load Recovered State]
-    F -->|No| H[Load Default State]
-```
+    example():
+     
+    async function example(){
+         // Setup Divisible Workspace Library with config
+         // This contains the Codecs, their Roles and Credentials
+         await DWS.Setup(config);
+         try{
+             // Request a status check from Codec with matching roles 'secondary'
+             const secondaryStatus = await DWS.Command.RequestStatus('secondary)
+             console.log('Secondary Status:', secondaryStatus);
+         } catch (error) {
+             // Log Error if could not connect or did not receive response from Codec
+             console.error(error)
+         }
+    }
+    ```
 
+    ```mermaid
+    sequenceDiagram
+    Primary Codec->>+Secondary Codec: Request Status Check
+    Secondary Codec->>+Secondary Codec: Check if in call or presenting
+    Secondary Codec->>+Primary Codec: Response With Result
+    ```
+
+* Send Heartbeats:
+
+    Send periodic heartbeats to specific devices with matching role
+     ```javascript
+    import DWS from './DWS_Lib';
+    import DWS from './DWS_Config';
+
+    example():
+     
+    async function example(){
+         // Setup Divisible Workspace Library with config
+         // This contains the Codecs, their Roles and Credentials
+         await DWS.Setup(config);
+         // Start sending heardbeat signals to the 'secondary' codec every minute
+         DWS.Command.StartHearbeat('secondary', 1);
+    }
+    ```
+
+    ```mermaid
+    sequenceDiagram
+    Primary Codec->>+Primary Codec: Start Hearbeat to Secondary
+    loop Every minute
+        Primary Codec->>+Secondary Codec: heartbeat-statename
+    end
+    ```
+
+* Listen For Heartbeats:
+
+    Listen for periodic heartbeats from specific devices and trigger the switching to a fallback state if no heartbeats have been received after a set amount of time. In this example when set to a ``Combined`` state, both Codecs begin to send heartbeats to eachother and also listen for hearbeats from eachother. If either don't receive a heartbeat for over 10 minutes their they individually fall back to a ``Divided`` state.
+    ```javascript
+    import DWS from './DWS_Lib';
+    import DWS from './DWS_Config';
+
+    const states = {
+        Primary: {
+            Divided() {
+                DWS.Command.StopSendingHeartbeats('Secondary');
+                DWS.Command.StopListeningHeartbeats('Secondary');
+            },
+            Combined() {
+                // Listen for heartbeats from 'Secondary' and fallback to 'Divided'
+                // if no heartbeats has been received for over 10 minutes
+                DWS.Command.ListenForHeartbeats('Secondary', 'Divided', 10);
+
+                // Start Sending Heartbeats to 'Primary'
+                DWS.Command.StartSendingHeartbeats('Secondary', 1);
+            }
+        },
+        Secondary: {
+            Divided() {
+                DWS.Command.StopSendingHeartbeats('Primary');
+                DWS.Command.StopListeningHeartbeats('Primary');
+            },
+            Combined() {
+                // Listen for heartbeats from 'Primary' and fallback to 'Divided'
+                // if no heartbeats has been received for over 10 minutes
+                DWS.Command.ListenForHeartbeats('Primary', 'Divided', 10);
+
+                // Start Sending Heartbeats to 'Primary'
+                DWS.Command.StartSendingHearbeats('Primary', 1);
+            }
+        }
+    }
+    
+    example():
+     
+    async function example(){
+        // Setup Divisible Workspace Library with config
+        // This contains the Codecs, their Roles and Credentials
+        await DWS.Setup.Config(config);
+        // Setup all codec states
+        await DWS.Setup.States(states);
+        // Set the codec to a combined state
+        await DWS.Command.ApplyState('combined');
+    }
+    ```
 
 ## Setup
 
