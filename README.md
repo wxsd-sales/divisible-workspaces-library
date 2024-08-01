@@ -8,7 +8,7 @@ The Divisible Workspaces (DWS) Macro Library is a suite of tools which provides 
 
 ## Overview
 
-This library aims to provide tools specific to divisbile workspaces for Cisco Collaboration RoomOS Devices. Currently the following features are available.
+This library aims to provide tools specific to divisbile workspaces use cases for Cisco Collaboration RoomOS Devices. Currently the following features are available:
 
 * Touch Panel Lock / Unlock:
 
@@ -154,7 +154,50 @@ This library aims to provide tools specific to divisbile workspaces for Cisco Co
         await DWS.Command.ApplyState('combined');
     }
     ```
+* State Management:
 
+  Easily define multiple states for each codec and switch between them with a single command. Additionally, you can define which xAPI Config/Status/Event subscription you wish to monitor only while in that state by adding them to the ``DWS.Subcriptions`` array and when changing between states, the subscriptions are all reset. Making it easy to have the codec react to events in one state and not another.
+
+  ```javascript
+    import DWS from './DWS_Lib';
+    import DWS from './DWS_Config';
+
+    const states = {
+        Primary: {
+            Divided() {
+                 // While 'Divided' don't monitor the VolumeMute xStatus
+            },
+            Combined() {
+                // While 'Combined' notify the 'Secondary' codec of VolumeMute changes
+                DWS.Subcriptions.push(xapi.Status.Audio.VolumeMute.on(state => {
+                  DWS.NotifyCodecs(['Secondary'], 'volumeChange-'+state);
+                  }))
+            }
+        },
+        Secondary: {
+            Divided() {
+
+            },
+            Combined() {
+                
+            }
+        }
+    }
+    
+    example():
+     
+    async function example(){
+        // Setup Divisible Workspace Library with config
+        // This contains the Codecs, their Roles and Credentials
+        await DWS.Setup.Config(config);
+        // Setup all codec states
+        await DWS.Setup.States(states);
+        // Set the codec to a combined state
+        await DWS.Command.ApplyState('combined');
+    }
+    ```
+
+  
 ## Setup
 
 ### Prerequisites & Dependencies: 
@@ -220,7 +263,7 @@ Refer to the ``DWS_Example``  macro which imports both the ``DWS_Lib`` and ``DWS
     DWS.Command.LockPanel()
     
     // Unlock the Touch Panel
-    DWS.Command.LockPanel()
+    DWS.Command.UnlockPanel()
     ```
 
 ## Demo
