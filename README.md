@@ -22,7 +22,7 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     // Unlock the Touch Panel
     DWS.Command.UnlockPanel()
     ```
-* Persistent Do Not Disturb:
+* Toggle Persistent Do Not Disturb:
 
     Enable or disable a persistant Do Not Disturb state
     ```javascript
@@ -34,16 +34,17 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     // Deactivate Persistent Do Not Disturb
     DWS.Command.DeactivateDND()
     ```
-* Ethernet Stream Mute:
+    
+* Toggle Ethernet Mute Using Stream Name:
 
-    Mute and Unmute Ethernet Audio Input using just the stream name
+    Easily mute and unmute an Ethernet Audio Input using just the stream name. No need to be concerned with streams being associated with different Ethernet Audio Input Connector IDs.
     ```javascript
     import DWS from './DWS_Lib';
 
     // Mute Ethernet Audio Input with stream name 'myStream'
     DWS.Command.MuteEthernetMic('myStream')
     
-    // Mute Ethernet Audio Input with stream name 'myStream'
+    // Unmute Ethernet Audio Input with stream name 'myStream'
     DWS.Command.UnmuteEthernetMic('myStream')
     ```
 
