@@ -42,10 +42,10 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     import DWS from './DWS_Lib';
 
     // Mute Ethernet Audio Input with stream name 'streamName'
-    DWS.Command..Audio.EthernetStream.Mute('streamName')
+    DWS.Command.Audio.EthernetStream.Mute('streamName')
     
     // Unmute Ethernet Audio Input with stream name 'streamName'
-    DWS.Command..Audio.EthernetStream.Mute('streamName')
+    DWS.Command.Audio.EthernetStream.Mute('streamName')
     ```
 
 * Request External Codec Status Check:
@@ -60,7 +60,7 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     async function example(){
          // Setup Divisible Workspace Library with config
          // This contains the Codecs, their Roles and Credentials
-         await DWS.Setup(config);
+         await DWS.Setup.Communication(config);
          try{
              // Request a status check from Codec with matching roles 'secondary'
              const secondaryStatus = await DWS.Command.RequestStatus('Secondary')
@@ -79,35 +79,52 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     Secondary Codec->>+Primary Codec: Response With Result
     ```
 
-* Send Heartbeats:
+* State Management:
 
-    Send periodic heartbeats to specific devices with matching role
-     ```javascript
+  Easily define multiple states for each codec and switch between them with a single command. Additionally, you can define which xAPI Config/Status/Event subscription you wish to monitor only while in that state by adding them to the ``DWS.Subcriptions`` array and when changing between states, the subscriptions are all reset. Making it easy to have the codec react to events in one state and not another.
+
+  ```javascript
     import DWS from './DWS_Lib';
     import DWS from './DWS_Config';
 
+    const states = {
+        Primary: {
+            Divided() {
+                 // While 'Divided' don't monitor the VolumeMute xStatus
+            },
+            Combined() {
+                // While 'Combined' notify the 'Secondary' codec of VolumeMute changes
+                DWS.Subcriptions.push(xapi.Status.Audio.VolumeMute.on(state => {
+                  DWS.NotifyCodecs(['Secondary'], 'volumeChange-'+state);
+                  }))
+            }
+        },
+        Secondary: {
+            Divided() {
+
+            },
+            Combined() {
+                
+            }
+        }
+    }
+    
     example():
      
     async function example(){
-         // Setup Divisible Workspace Library with config
-         // This contains the Codecs, their Roles and Credentials
-         await DWS.Setup(config);
-         // Start sending heardbeat signals to the 'secondary' codec every minute
-         DWS.Command.Heartbeat.Send.Start('Secondary', 1);
+        // Setup Divisible Workspace Library with config
+        // This contains the Codecs, their Roles and Credentials
+        await DWS.Setup.Config(config);
+        // Setup all codec states
+        await DWS.Setup.States(states);
+        // Set the codec to a combined state
+        await DWS.Command.ApplyState('combined');
     }
     ```
+  
+* Send and Listen for Heartbeats:
 
-    ```mermaid
-    sequenceDiagram
-    Primary Codec->>+Primary Codec: Start Hearbeat to Secondary
-    loop Every minute
-        Primary Codec->>+Secondary Codec: heartbeat-statename
-    end
-    ```
-
-* Listen For Heartbeats:
-
-    Listen for periodic heartbeats from specific devices and trigger the switching to a fallback state if no heartbeats have been received after a set amount of time. In this example when set to a ``Combined`` state, both Codecs begin to send heartbeats to eachother and also listen for hearbeats from eachother. If either don't receive a heartbeat for over 10 minutes their they individually fall back to a ``Divided`` state.
+    Send periodic heartbeats and listen for heartbeats, to and from specific devices by role name and trigger fallback states in the event no heartbeats have been received for a specified time.
     ```javascript
     import DWS from './DWS_Lib';
     import DWS from './DWS_Config';
@@ -159,49 +176,41 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
         await DWS.Command.ApplyState('combined');
     }
     ```
-* State Management:
 
-  Easily define multiple states for each codec and switch between them with a single command. Additionally, you can define which xAPI Config/Status/Event subscription you wish to monitor only while in that state by adding them to the ``DWS.Subcriptions`` array and when changing between states, the subscriptions are all reset. Making it easy to have the codec react to events in one state and not another.
+    ```mermaid
+    sequenceDiagram
+    Note over Primary Codec,Secondary Codec: Devices In "Combined" State
+    box Blue Room A
+    participant Primary Codec
+    end
+    box Red Room B
+    participant Secondary Codec
+    end
+    par Start Listening For Heartbeats
+        Primary Codec->>+Primary Codec: Start Listening
+    and
+        Secondary Codec->>+Secondary Codec: Start Listening
+    end
 
-  ```javascript
-    import DWS from './DWS_Lib';
-    import DWS from './DWS_Config';
 
-    const states = {
-        Primary: {
-            Divided() {
-                 // While 'Divided' don't monitor the VolumeMute xStatus
-            },
-            Combined() {
-                // While 'Combined' notify the 'Secondary' codec of VolumeMute changes
-                DWS.Subcriptions.push(xapi.Status.Audio.VolumeMute.on(state => {
-                  DWS.NotifyCodecs(['Secondary'], 'volumeChange-'+state);
-                  }))
-            }
-        },
-        Secondary: {
-            Divided() {
-
-            },
-            Combined() {
-                
-            }
-        }
-    }
+    par Start Sending Heartbeats
+        loop Send Heartbeat Every minute
+            Primary Codec->>+Secondary Codec: heartbeat
+        end
+    and
+       loop Send Heartbeat Every minute
+        Secondary Codec->>+Primary Codec: heartbeat
+        end
+    end
     
-    example():
-     
-    async function example(){
-        // Setup Divisible Workspace Library with config
-        // This contains the Codecs, their Roles and Credentials
-        await DWS.Setup.Config(config);
-        // Setup all codec states
-        await DWS.Setup.States(states);
-        // Set the codec to a combined state
-        await DWS.Command.ApplyState('combined');
-    }
-    ```
+    Note over Primary Codec,Secondary Codec: No Heartbeats Received For 10 Minutes
 
+    par Trigger Fallback States
+        Primary Codec->>+Primary Codec: Fallback To "Divided" State
+    and 
+        Secondary Codec->>+Secondary Codec: Fallback To "Divided" State
+    end
+    ```
   
 ## Setup
 
@@ -244,7 +253,7 @@ Refer to the ``DWS_Example``  macro which imports both the ``DWS_Lib`` and ``DWS
                 // Apply Secondary Codec Divided changes here
             },
             Combined() {
-                // Apply Primary Codec Combined changes here
+                // Apply Secondary Codec Combined changes here
             }
         }
     }
@@ -252,7 +261,8 @@ Refer to the ``DWS_Example``  macro which imports both the ``DWS_Lib`` and ``DWS
     init();
     async function init(){
       console.log('Setting up Divisible Workspaces Library with config and states');
-      await DWS.Setup(config, states);
+      await DWS.Setup.Communication(config);
+      await DWS.Setup.States(states);   
       console.log('Setup Complete');
       setTimeout(DWS.Command.ApplyState, 2000, 'Combined')
     }
