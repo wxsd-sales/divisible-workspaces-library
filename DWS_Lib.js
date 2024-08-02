@@ -35,6 +35,7 @@ import xapi from 'xapi';
 
 const PANEL_LOCATION = 'HomeScreen';
 const BASE_PANEL_ID = 'divisibleWorkspaces';
+const STOREAGE_MACRO = 'DWS_Storage';
 
 
 /*********************************************************
@@ -60,30 +61,54 @@ let dndSubscriptions = [];
 
 let messageEventCallbacks = {}; // { roleName: [callbacks] }
 
+let controlPanel;
+
 /* 
   Instantiate DWS Object, later exported
 */
 const DWS = {
   Subscriptions: [],
   Command: {
-    SaveControlPanel: {},
-    DeleteControlPanel: {},
-    LockPanel: {},
-    UnlockPanel: {},
-    StartSendingHeartbeats: {},
-    StopSendingHeartbeats: {},
-    StartListeningHeartbeats: {},
-    StopListeningHeartbeats: {},
-    MuteEthernetMic: {},
-    UnMuteEthernetMic: {},
+    Heartbeat: {
+      Send: {
+        Start: {},
+        Stop: {},
+      },
+      Listen: {
+        Start: {},
+        Stop: {}
+      }
+    },
+    TouchPanel: {
+      Lock: {},
+      Unlock: {},
+    },
+    DoNotDisturb: {
+      Activate: {},
+      Deactivate: {}
+    },
+    Audio: {
+      EthernetStream: {
+        Mute: {},
+        Unmute: {}
+      }
+    },
+    ControlPanel: {
+      Save: {},
+      Delete: {}
+    },
     ApplyState: {},
     RestartState: {},
     NotifyCodecs: {},
-    ActivateDND: {},
-    DeactivateDND: {},
-    RequestStatus: {}
+    RequestStatus: {},
+    Memory: {
+      Write: {},
+      Read: {}
+    }
   },
   Status: {
+    Role: {},
+    State: {},
     CheckIfInCall: {},
     CheckIfPresenting: {}
   },
@@ -91,7 +116,7 @@ const DWS = {
     Codec: {}
   },
   Setup: {
-    Config: {},
+    Communication: {},
     States: {}
   },
 };
@@ -210,13 +235,23 @@ function identifyMissingRoles(account, requiredRoles) {
 
 }
 
+function parseJSON(jsonText) {
+  let result
+  try {
+    result = JSON.parse(jsonText)
+  } catch (e) {
+    console.debug('Could not parse string:', jsonText)
+  }
+  return result
+}
+
 
 /**
  * Sends formated heartbeat message string to target codec role
  */
 function sendHeartbeat(targetRole) {
   console.log('Sending Hearbeat to role:', targetRole)
-  DWS.Command.NotifyCodecs(BASE_PANEL_ID + '-heartbeat-' + thisCodecRole, [targetRole])
+  DWS.Command.NotifyCodecs(BASE_PANEL_ID + '-' + thisCodecRole + '-heartbeat', [targetRole])
 }
 
 
@@ -231,6 +266,40 @@ function clearSubscriptions(subArray) {
   subArray = [];
 }
 
+DWS.Command.Memory.Write = async function (key, value) {
+  const macroName = _main_macro_name();
+  let macro = ''
+  try {
+    macro = await xapi.Command.Macros.Macro.Get({ Name: STOREAGE_MACRO , Content: 'True' })
+  } catch (e) { }
+  return new Promise(resolve => {
+    const raw = macro.Macro[0].Content.replace(/const.*data.*=\s*{/g, '{');
+    let data = JSON.parse(raw);
+    data[key] = value;
+    let newStore = JSON.stringify(data, null, 4);
+    xapi.Command.Macros.Macro.Save({ Name: STOREAGE_MACRO }, `const data = ${newStore}`).then(() => {
+      console.debug({ 'DWS Write Debug': `Write Complete`, Location: macroName, Data: `{"${key}" : "${value}"}` });
+      resolve(value);
+    });
+  });
+}
+
+DWS.Command.Memory.Read = async function (key) {
+  const macroName = _main_macro_name();
+  let macro = ''
+  try {
+    macro = await xapi.Command.Macros.Macro.Get({ Name: STOREAGE_MACRO, Content: 'True' })
+  } catch (e) { }
+  return new Promise((resolve, reject) => {
+    let raw = macro.Macro[0].Content.replace(/var.*const.*=\s*{/g, '{')
+    let data = JSON.parse(raw)
+    if (data[key] != undefined) {
+      resolve(data[key])
+    } else {
+      reject({ '⚠ DWS Error ⚠': `DWS Read Error. Object [${key}] not found in [${STOREAGE_MACRO}] for Macro [${macroName}]` })
+    }
+  });
+}
 
 
 /**
@@ -311,7 +380,7 @@ async function postMessage(codec) {
   Params.Timeout = 5;
   Params.AllowInsecureHTTPS = 'True'
   Params.Url = `https://${codec.ip}/putxml`
-  Params.Header = ['Authorization: Basic ' + btoa(`${codec.username}:${codec.password}`)
+  Params.Header = ['Authorization: Basic ' + btoa(`${credentials.username}:${credentials.password}`)
     , 'Content-Type: text/xml']
 
   delete connectionBuffer[codec.ip];
@@ -353,14 +422,34 @@ async function processPanelClose(event, alert) {
 /**
  * Saves UI Extension Panel to primary device for combine / divide control
  */
-async function savePanel() {
+async function savePanel(states) {
   const panelLocation = PANEL_LOCATION ?? 'Homescreen';
   const panelId = BASE_PANEL_ID ?? 'divisibleWorkspaces';
-  const button = config.button;
+  const button = {
+    name: 'Combine Room',
+    icon: 'Sliders',
+    color: ''
+  };
 
+  
   let order = '';
   const orderNum = await panelOrder(panelId);
   if (orderNum != -1) order = `<Order>${orderNum}</Order>`;
+
+  let values = `<Value>
+                  <Key>Combined</Key>
+                  <Name>Combined</Name>
+                  </Value>
+                <Value>
+                  <Key>Divided</Key>
+                  <Name>Divided</Name>
+                </Value>`;
+
+  if(states){
+    values = states.map(stateName => {
+      return `<Value><Key>${stateName}</Key><Name>${stateName}</Name></Value>`
+    }).join('');
+  }
 
   const panel = `
   <Extensions>
@@ -378,14 +467,7 @@ async function savePanel() {
             <Type>GroupButton</Type>
             <Options>size=4;columns=2</Options>
             <ValueSpace>
-              <Value>
-                <Key>1</Key>
-                <Name>Combined</Name>
-              </Value>
-              <Value>
-                <Key>2</Key>
-                <Name>Divided</Name>
-              </Value>
+              ${values}
             </ValueSpace>
           </Widget>
         </Row>
@@ -394,8 +476,10 @@ async function savePanel() {
     </Panel>
   </Extensions>`;
 
+  console.log(panel)
 
-  xapi.Command.UserInterface.Extensions.Panel.Save({ PanelId: panelId }, panel)
+
+  xapi.Command.UserInterface.Extensions.Panel.Save({ PanelId: BASE_PANEL_ID }, panel)
     .catch(e => console.log('Error saving panel: ' + e.message))
 }
 
@@ -477,7 +561,6 @@ function validateConfig(config) {
 function validateStates(states) {
   if (!states) throw new Error('No states provided')
 
-
 }
 
 /**
@@ -498,11 +581,9 @@ function deactivateMacro(error) {
  */
 async function getStoredState() {
   try {
-    return await GMM.read.global('SimpleJoinSplit_combinedState');
+    return DWS.Command.Memory.Read('State');
   } catch (e) {
-    console.debug(e)
-    await saveCombinedState('divided')
-    return 'divided'
+    console.debug(e);
   }
 }
 
@@ -511,9 +592,9 @@ async function getStoredState() {
  * @param {string} state - The name of the state to save
  */
 async function saveCombinedState(state) {
-  console.debug('Saving ')
+  console.debug('Saving Sate:', state)
   try {
-    await GMM.write.global('SimpleJoinSplit_combinedState', state)
+    await DWS.Command.Memory.Read('State', state)
   } catch (e) {
     console.debug(e)
   }
@@ -524,13 +605,16 @@ async function saveCombinedState(state) {
  * DWS Commands Functions
 **********************************************************/
 
+
+
+
 /**
  * Starts sending heartbeat messages to targeted role
  * @param {string[]} targetRoles - The roles which should receive heartbeats
  * @param {number} mintues - Interval minutes in which to send heartbeats
  */
-DWS.Command.StartSendingHeartbeats = (targetRole, minutes = 1) => {
-  console.log(`Starting: Sending Heartbeats - Targets [${targetRole}] - Interval [${minutes}] minutes`)
+DWS.Command.Heartbeat.Send.Start = function (targetRole, minutes = 1) {
+  console.log(`Starting: Heartbeat Send - Targets [${targetRole}] - Interval [${minutes}] minutes`)
   const existing = sendingHeartbeats?.[targetRole];
   if (existing) clearInterval(existing) // Clear any existing hearbeats to this role
   sendingHeartbeats[targetRole] = setInterval(sendHeartbeat, minutes * 60 * 1000, targetRole)
@@ -542,8 +626,8 @@ DWS.Command.StartSendingHeartbeats = (targetRole, minutes = 1) => {
  * @param {string} fallbackState - The roles 
  * @param {number} minutes - The roles 
  */
-DWS.Command.StartListeningHeartbeats = (targetRole, fallbackState, minutes) => {
-  console.log(`Starting: Listening for Heartbeat - Target [${targetRole}] - Fallback State [${fallbackState}] - Timeout [${minutes} minutes`)
+DWS.Command.Heartbeat.Listen.Start = function (targetRole, fallbackState, minutes) {
+  console.log(`Starting: Listening for Heartbeat - Target [${targetRole}] - Fallback State [${fallbackState}] - Timeout [${minutes}] minutes`)
   const existing = listeningHeartbeats?.[targetRole];
   if (existing) clearTimeout(existing.timeout)
 
@@ -558,10 +642,12 @@ DWS.Command.StartListeningHeartbeats = (targetRole, fallbackState, minutes) => {
   }
 }
 
+
+
 /**
  * Stop sending hearbeats
  */
-DWS.Command.StopSendingHeartbeats = (role) => {
+DWS.Command.Heartbeat.Send.Stop = function (role) {
   console.log(`Stopping: Sending Heartbeat - Target [${role}]`);
   const existing = sendingHeartbeats?.[role];
   if (!existing) return
@@ -572,7 +658,7 @@ DWS.Command.StopSendingHeartbeats = (role) => {
 /**
  * Stop sending hearbeats
  */
-DWS.Command.StopListeningHeartbeats = (role) => {
+DWS.Command.Heartbeat.Listen.Stop = function (role) {
   console.log(`Stopping: Listening for Heartbeat - Target [${role}]`);
   const existing = listeningHeartbeats?.[role];
   if (!existing) return
@@ -587,7 +673,7 @@ DWS.Command.StopListeningHeartbeats = (role) => {
  */
 DWS.Command.NotifyCodecs = (message, roles) => {
   console.debug('message:', message, 'roles:', roles)
-  if (!remoteCodecs) { 
+  if (!remoteCodecs) {
     console.log('No remote codecs available to notify')
     return
   }
@@ -597,6 +683,25 @@ DWS.Command.NotifyCodecs = (message, roles) => {
   const codecs = remoteCodecs.filter(codec => roles.includes(codec.role.toLowerCase()))
   return codecs.forEach(codec => sendMessage(codec, message))
 }
+
+
+DWS.Command.ControlPanel.Save = function() {
+
+  if(!thisCodecStates) return
+
+  const states = Object.keys(thisCodecStates)
+
+  savePanel(states);
+  
+}
+
+
+DWS.Command.ControlPanel.Delete = function() {
+
+  
+}
+
+
 
 
 /**
@@ -654,24 +759,23 @@ DWS.Command.RequestStatus = (role) => {
 
 }
 
-
 /**
  * Mutes the Ethernet Audio Input for the given stream name
  * @param {string} streamName - The name of the Ethernet Stream
  */
-DWS.Command.MuteEthernetMic = (streamName) => setEthernetMic(streamName, 'Off')
+DWS.Command.Audio.EthernetStream.Mute = function (streamName){ setEthernetMic(streamName, 'Off') }
 
 /**
  * Unmutes the Ethernet Audio Input for the given stream name
  * @param {string} streamName - The name of the Ethernet Stream
  */
-DWS.Command.UnmuteEthernetMic = (streamName) => setEthernetMic(streamName, 'On')
+DWS.Command.Audio.EthernetStream.Unmute = function (streamName){setEthernetMic(streamName, 'On') }
 
 
 /**
  * Locks the Controller Panel
  */
-DWS.Command.LockPanel = () => {
+DWS.Command.TouchPanel.Lock = () => {
   console.log('Locking Touch Panel')
   xapi.Config.UserInterface.Features.HideAll.set('True');
   let alert = config.lockPanelText;
@@ -688,7 +792,7 @@ DWS.Command.LockPanel = () => {
 /**
  * Unlock the Controller Panel
  */
-DWS.Command.UnlockPanel = () => {
+DWS.Command.TouchPanel.Unlock = () => {
   console.log('Unlocking Touch Panel')
   xapi.Config.UserInterface.Features.HideAll.set('False');
   xapi.Command.UserInterface.Message.Prompt.Clear({ FeedbackId: BASE_PANEL_ID + 'lockPanel' });
@@ -699,7 +803,7 @@ DWS.Command.UnlockPanel = () => {
 /**
  * Activate Persistant DND
  */
-DWS.Command.ActivateDND = () => {
+DWS.Command.DoNotDisturb.Activate = function () {
   console.log('Activating Persistant DoNotDisturb')
   // Subscribe to changes to the DND status
   // if state = active, do nothing. Otherwise active DND
@@ -716,7 +820,7 @@ DWS.Command.ActivateDND = () => {
 /**
  * Deactivate Persistant DND
  */
-DWS.Command.DeactivateDND = () => {
+DWS.Command.DoNotDisturb.Deactivatefme = () => {
   console.log('Deactivating Persistant DoNotDisturb')
   // Clear the DND Subscriptions
   clearSubscriptions(dndSubscriptions);
@@ -740,6 +844,11 @@ DWS.Command.ApplyState = async (stateName) => {
   return
 }
 
+DWS.Status.State = async function() {
+  return await getStoredState();
+}
+
+
 DWS.Event.Codec.on = (role) => {
 
 
@@ -750,7 +859,7 @@ DWS.Event.Codec.on = (role) => {
  * Validates and save provided config
  * @param {object} config - The name of the state to save
  */
-DWS.Setup.Config = async (config) => {
+DWS.Setup.Communication = async (config) => {
 
   console.log('DWS Setup Config Started')
 
@@ -770,6 +879,7 @@ DWS.Setup.Config = async (config) => {
 
   setupUserAccount(credentials.username, credentials.password)
 
+  xapi.Config.HttpClient.AllowInsecureHTTPS.set('True');
 
   // Identify this device from provided codecs
   const self = await identifySelf(config.codecs);
@@ -781,32 +891,36 @@ DWS.Setup.Config = async (config) => {
   }
 
   thisCodecRole = self.role;
+  DWS.Status.Role = self.role;
+  
   console.log('This Codecs Role:', thisCodecRole)
 
 
   remoteCodecs = await identifyRemoteCodecs(config.codecs);
-  console.log('Remote Codecs:', JSON.stringify(remoteCodecs));
+  console.debug('Remote Codecs:', JSON.stringify(remoteCodecs));
 
   // Generic listener for events
   xapi.Event.Message.Send.on(async event => {
-
-    if (!event.Text.startsWith(BASE_PANEL_ID)) return
+    console.debug('Raw Message Send Event Received:', event)
+    const data = parseJSON(event.Text);
+    if (!data) return
+    const value = data?.Value;
+    if (!value) return
+    if (!value.startsWith(BASE_PANEL_ID)) return
     console.debug('DWS Message Send Event Received:', event);
 
-    const [_panelId, eventType, value] = data.Value.split('-');
+    const [_panelId, role, eventType, var1, var2] = data.Value.split('-');
     switch (eventType) {
       case 'changeState':
         applyState(value);
         break;
       case 'heartbeat':
-        if (heartbeatTimer) {
-          const existing = listeningHeartbeats?.[value]
-          if (!existing) return
-          //{ roleName: { timeout, fallbackState, minutes} ...}
-          console.log('Received heartbeat listener for role:', value)
-          clearTimeout(existing.timeout)
-          existing.timeout = setTimeout(DWS.Command.ApplyState, existing.minutes * 60 * 1000, existing.fallbackState)
-        }
+        const existing = listeningHeartbeats?.[role]
+        if (!existing) return
+        //{ roleName: { timeout, fallbackState, minutes} ...}
+        console.log(`Heartbeat Received From [${role}] - Resetting Timer`)
+        clearTimeout(existing.timeout)
+        existing.timeout = setTimeout(DWS.Command.ApplyState, existing.minutes * 60 * 1000, existing.fallbackState)
         break;
     }
   })
