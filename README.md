@@ -17,10 +17,10 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     import DWS from './DWS_Lib';
 
     // Lock the Touch Panel
-    DWS.Command.LockPanel()
+    DWS.Command.TouchPanel.Lock()
     
     // Unlock the Touch Panel
-    DWS.Command.UnlockPanel()
+    DWS.Command.TouchPanel.Unlock()
     ```
 * Toggle Persistent Do Not Disturb:
 
@@ -29,10 +29,10 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     import DWS from './DWS_Lib';
 
     // Activate Persistent Do Not Disturb
-    DWS.Command.ActivateDND()
+    DWS.Command.DoNotDisturb.Activate()
     
     // Deactivate Persistent Do Not Disturb
-    DWS.Command.DeactivateDND()
+    DWS.Command.DoNotDisturb.Deactivate()
     ```
     
 * Toggle Ethernet Mute Using Stream Name:
@@ -41,11 +41,11 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     ```javascript
     import DWS from './DWS_Lib';
 
-    // Mute Ethernet Audio Input with stream name 'myStream'
-    DWS.Command.MuteEthernetMic('myStream')
+    // Mute Ethernet Audio Input with stream name 'streamName'
+    DWS.Command..Audio.EthernetStream.Mute('streamName')
     
-    // Unmute Ethernet Audio Input with stream name 'myStream'
-    DWS.Command.UnmuteEthernetMic('myStream')
+    // Unmute Ethernet Audio Input with stream name 'streamName'
+    DWS.Command..Audio.EthernetStream.Mute('streamName')
     ```
 
 * Request External Codec Status Check:
@@ -63,7 +63,7 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
          await DWS.Setup(config);
          try{
              // Request a status check from Codec with matching roles 'secondary'
-             const secondaryStatus = await DWS.Command.RequestStatus('secondary)
+             const secondaryStatus = await DWS.Command.RequestStatus('Secondary')
              console.log('Secondary Status:', secondaryStatus);
          } catch (error) {
              // Log Error if could not connect or did not receive response from Codec
@@ -93,7 +93,7 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
          // This contains the Codecs, their Roles and Credentials
          await DWS.Setup(config);
          // Start sending heardbeat signals to the 'secondary' codec every minute
-         DWS.Command.StartHearbeat('secondary', 1);
+         DWS.Command.Heartbeat.Send.Start('Secondary', 1);
     }
     ```
 
@@ -115,29 +115,33 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     const states = {
         Primary: {
             Divided() {
-                DWS.Command.StopSendingHeartbeats('Secondary');
-                DWS.Command.StopListeningHeartbeats('Secondary');
+                // Stop sending heartbeats to 'Secondary'
+                DWS.Command.Heartbeat.Send.Stop('Secondary');
+                // Stop listening for hearbeats from 'Secondary'
+                DWS.Command.Heartbeat.Listen.Stop('Secondary');
             },
             Combined() {
                 // Listen for heartbeats from 'Secondary' and fallback to 'Divided'
                 // if no heartbeats has been received for over 10 minutes
-                DWS.Command.ListenForHeartbeats('Secondary', 'Divided', 10);
+                DWS.Command.Heartbeat.Listen.Start('Secondary', 'Divided', 10);
 
-                // Start Sending Heartbeats to 'Primary'
-                DWS.Command.StartSendingHeartbeats('Secondary', 1);
+                // Start Sending Heartbeats to 'Secondary' every minute
+                DWS.Command.Heartbeat.Send.Start('Secondary', 1);
             }
         },
         Secondary: {
             Divided() {
-                DWS.Command.StopSendingHeartbeats('Primary');
-                DWS.Command.StopListeningHeartbeats('Primary');
+                // Stop sending heartbeats to 'Primary'
+                DWS.Command.Heartbeat.Send.Stop('Primary');
+                // Stop listening for hearbeats from 'Primary'
+                DWS.Command.Heartbeat.Listen.Stop('Primary');
             },
             Combined() {
                 // Listen for heartbeats from 'Primary' and fallback to 'Divided'
                 // if no heartbeats has been received for over 10 minutes
                 DWS.Command.ListenForHeartbeats('Primary', 'Divided', 10);
 
-                // Start Sending Heartbeats to 'Primary'
+                // Start Sending Heartbeats to 'Primary' ever minute
                 DWS.Command.StartSendingHearbeats('Primary', 1);
             }
         }
@@ -148,7 +152,7 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     async function example(){
         // Setup Divisible Workspace Library with config
         // This contains the Codecs, their Roles and Credentials
-        await DWS.Setup.Config(config);
+        await DWS.Setup.Communication(config);
         // Setup all codec states
         await DWS.Setup.States(states);
         // Set the codec to a combined state
