@@ -156,10 +156,10 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
             Combined() {
                 // Listen for heartbeats from 'Primary' and fallback to 'Divided'
                 // if no heartbeats has been received for over 10 minutes
-                DWS.Command.ListenForHeartbeats('Primary', 'Divided', 10);
+                DWS.Command.Heartbeat.Listen.Start('Primary', 'Divided', 10);
 
                 // Start Sending Heartbeats to 'Primary' ever minute
-                DWS.Command.StartSendingHearbeats('Primary', 1);
+                DWS.Command.Heartbeat.Send.Start('Primary', 1);
             }
         }
     }
