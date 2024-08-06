@@ -45,7 +45,7 @@ This library aims to provide tools specific to divisbile workspaces use cases fo
     DWS.Command.Audio.EthernetStream.Mute('streamName')
     
     // Unmute Ethernet Audio Input with stream name 'streamName'
-    DWS.Command.Audio.EthernetStream.Mute('streamName')
+    DWS.Command.Audio.EthernetStream.Unmute('streamName')
     ```
 
 * Request External Codec Status Check:
