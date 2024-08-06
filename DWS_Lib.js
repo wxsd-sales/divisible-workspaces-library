@@ -55,13 +55,12 @@ let connectionBuffer = {};
 
 let sendingHeartbeats = {} // { roleName: interval ...}
 let listeningHeartbeats = {} // { roleName: { timeout, fallbackState, minutes} ...}
-
 let lockPanelSubscriptions = [];
 let dndSubscriptions = [];
+let controlPanelSubscription;
 
 let messageEventCallbacks = {}; // { roleName: [callbacks] }
 
-let controlPanel;
 
 /* 
   Instantiate DWS Object, later exported
@@ -97,8 +96,10 @@ const DWS = {
       Save: {},
       Delete: {}
     },
-    ApplyState: {},
-    RestartState: {},
+    State: {
+      Set: {},
+      Restore: {}
+    },
     NotifyCodecs: {},
     RequestStatus: {},
     Memory: {
@@ -109,8 +110,8 @@ const DWS = {
   Status: {
     Role: {},
     State: {},
-    CheckIfInCall: {},
-    CheckIfPresenting: {}
+    InCall: {},
+    Presenting: {}
   },
   Event: {
     Codec: {}
@@ -185,7 +186,7 @@ async function setupUserAccount(username, password, requiredRoles = ['Integrator
     console.debug(`Setting password for User Account [${username}]`);
     await xapi.Command.UserManagement.User.Passphrase.Set({ NewPassphrase: password, Username: username })
       .catch(error => {
-        const reason = error?.data?.Result[0]?.Reason;
+        const reason = error?.data?.Result?.[0]?.Reason;
         if (reason) throw new Error('Unable to setup user: ' + reason)
         throw new Error('Unable to setup user: ' + error.message)
       })
@@ -202,7 +203,7 @@ async function setupUserAccount(username, password, requiredRoles = ['Integrator
       Username: username
     })
       .catch(error => {
-        const reason = error?.data?.Result[0]?.Reason;
+        const reason = error?.data?.Result?.[0]?.Reason;
         if (reason) throw new Error('Unable to setup user: ' + reason)
         throw new Error('Unable to setup user: ' + error.message)
       })
@@ -236,13 +237,12 @@ function identifyMissingRoles(account, requiredRoles) {
 }
 
 function parseJSON(jsonText) {
-  let result
+  if (!jsonText) return
   try {
-    result = JSON.parse(jsonText)
+    return JSON.parse(jsonText)
   } catch (e) {
     console.debug('Could not parse string:', jsonText)
   }
-  return result
 }
 
 
@@ -258,47 +258,34 @@ function sendHeartbeat(targetRole) {
 /**
  * Clears all subscriptions for the provided subscription array
  */
-function clearSubscriptions(subArray) {
-  for (let i = 0; i < subArray.length; i++) {
-    subArray[i]();
-    subArray[i] = () => void 0;
+function clearSubscriptions(subscriptions) {
+  if(typeof subscriptions === 'function') {
+    console.debug('Clearing single subscription')
+    subscriptions();
+    subscriptions = () => void 0;
+    return
   }
-  subArray = [];
+  
+  console.debug('Clearing subscription array - number of subscriptions:', subscriptions.length)
+  for (let i = 0; i < subscriptions.length; i++) {
+    subscriptions[i]();
+    subscriptions[i] = () => void 0;
+  }
+  subscriptions = [];
 }
 
 DWS.Command.Memory.Write = async function (key, value) {
-  const macroName = _main_macro_name();
-  let macro = ''
-  try {
-    macro = await xapi.Command.Macros.Macro.Get({ Name: STOREAGE_MACRO , Content: 'True' })
-  } catch (e) { }
-  return new Promise(resolve => {
-    const raw = macro.Macro[0].Content.replace(/const.*data.*=\s*{/g, '{');
-    let data = JSON.parse(raw);
-    data[key] = value;
-    let newStore = JSON.stringify(data, null, 4);
-    xapi.Command.Macros.Macro.Save({ Name: STOREAGE_MACRO }, `const data = ${newStore}`).then(() => {
-      console.debug({ 'DWS Write Debug': `Write Complete`, Location: macroName, Data: `{"${key}" : "${value}"}` });
-      resolve(value);
-    });
-  });
+  const macro = await xapi.Command.Macros.Macro.Get({ Name: STOREAGE_MACRO, Content: 'True' }).catch(e => { })
+  let data = parseJSON(macro?.Macro?.[0]?.Content)?.[0] ?? {};
+  data[key] = value
+  await xapi.Command.Macros.Macro.Save({ Name: STOREAGE_MACRO, Overwrite: 'True', Transpile: 'True' }, JSON.stringify([data], null, 4))
+  return value
 }
 
 DWS.Command.Memory.Read = async function (key) {
-  const macroName = _main_macro_name();
-  let macro = ''
-  try {
-    macro = await xapi.Command.Macros.Macro.Get({ Name: STOREAGE_MACRO, Content: 'True' })
-  } catch (e) { }
-  return new Promise((resolve, reject) => {
-    let raw = macro.Macro[0].Content.replace(/var.*const.*=\s*{/g, '{')
-    let data = JSON.parse(raw)
-    if (data[key] != undefined) {
-      resolve(data[key])
-    } else {
-      reject({ '⚠ DWS Error ⚠': `DWS Read Error. Object [${key}] not found in [${STOREAGE_MACRO}] for Macro [${macroName}]` })
-    }
-  });
+  const macro = await xapi.Command.Macros.Macro.Get({ Name: STOREAGE_MACRO, Content: 'True' }).catch(e => { })
+  const data = parseJSON(macro?.Macro?.[0]?.Content)?.[0] ?? {};
+  return data?.[key]
 }
 
 
@@ -403,7 +390,6 @@ function sendMessage(codec, message) {
     }
     connectionBuffer[codec.ip].timer = setTimeout(postMessage, 300, codec)
   }
-
 }
 
 /**
@@ -431,25 +417,15 @@ async function savePanel(states) {
     color: ''
   };
 
-  
-  let order = '';
-  const orderNum = await panelOrder(panelId);
-  if (orderNum != -1) order = `<Order>${orderNum}</Order>`;
+  const order = await panelOrder(panelId);
 
-  let values = `<Value>
-                  <Key>Combined</Key>
-                  <Name>Combined</Name>
-                  </Value>
-                <Value>
-                  <Key>Divided</Key>
-                  <Name>Divided</Name>
-                </Value>`;
-
-  if(states){
-    values = states.map(stateName => {
+  function createValues(states){
+    return states.map(stateName => {
       return `<Value><Key>${stateName}</Key><Name>${stateName}</Name></Value>`
     }).join('');
   }
+
+  const values = (states) ? createValues(states) : createValues(['Divided', 'Combined'])
 
   const panel = `
   <Extensions>
@@ -460,10 +436,10 @@ async function savePanel(states) {
       <Name>${button.name}</Name>
       <ActivityType>Custom</ActivityType>
       <Page>
-        <Name>${button.name}/Name>
+        <Name>${button.name}</Name>
         <Row>
           <Widget>
-            <WidgetId>${panelId}-combinedivide</WidgetId>
+            <WidgetId>${panelId}-changeState</WidgetId>
             <Type>GroupButton</Type>
             <Options>size=4;columns=2</Options>
             <ValueSpace>
@@ -476,11 +452,19 @@ async function savePanel(states) {
     </Panel>
   </Extensions>`;
 
-  console.log(panel)
-
-
   xapi.Command.UserInterface.Extensions.Panel.Save({ PanelId: BASE_PANEL_ID }, panel)
     .catch(e => console.log('Error saving panel: ' + e.message))
+}
+
+/**
+ * Sets the control panel widget to the correct state
+ */
+async function syncControlWidget() {
+  const currentState = await DWS.Status.State.Get();
+  if(!currentState) return
+  console.log('Setting Button Group To State:', currentState)
+  xapi.Command.UserInterface.Extensions.Widget.SetValue(
+    { Value: currentState, WidgetId: BASE_PANEL_ID+'-changeState' });
 }
 
 
@@ -491,10 +475,10 @@ async function savePanel(states) {
 async function panelOrder(panelId) {
   const list = await xapi.Command.UserInterface.Extensions.List({ ActivityType: "Custom" });
   const panels = list?.Extensions?.Panel
-  if (!panels) return -1
+  if (!panels) return ''
   const existingPanel = panels.find(panel => panel.PanelId == panelId)
-  if (!existingPanel) return -1
-  return existingPanel.Order
+  if (!existingPanel) return ''
+  return `<Order>${existingPanel.Order}</Order>`
 }
 
 
@@ -575,37 +559,10 @@ function deactivateMacro(error) {
   return error
 }
 
-/**
- * Returns boolean status if Codec is in a combined state
- * @returns {Promise<boolean>} Returns boolean Promise object representing true if combined and false if not
- */
-async function getStoredState() {
-  try {
-    return DWS.Command.Memory.Read('State');
-  } catch (e) {
-    console.debug(e);
-  }
-}
-
-/**
- * Saves the combined state as a string
- * @param {string} state - The name of the state to save
- */
-async function saveCombinedState(state) {
-  console.debug('Saving Sate:', state)
-  try {
-    await DWS.Command.Memory.Read('State', state)
-  } catch (e) {
-    console.debug(e)
-  }
-}
-
 
 /*********************************************************
  * DWS Commands Functions
 **********************************************************/
-
-
 
 
 /**
@@ -636,7 +593,7 @@ DWS.Command.Heartbeat.Listen.Start = function (targetRole, fallbackState, minute
     minutes,
     timeout: setTimeout(() => {
       console.log('Falling back to state:', fallbackState);
-      DWS.Command.ApplyState(fallbackState);
+      DWS.Command.State.Set(fallbackState);
       DWS.Command.StopListeningHeartbeats(targetRole)
     }, minutes * 60 * 1000)
   }
@@ -685,20 +642,34 @@ DWS.Command.NotifyCodecs = (message, roles) => {
 }
 
 
-DWS.Command.ControlPanel.Save = function() {
 
-  if(!thisCodecStates) return
+/**
+ * Sents a message to all codecs or thoses matching the roles provided
+ * @param {string[]} states - The message string to send
+ * @param {string[]} roles - The roles 
+ */
+DWS.Command.ControlPanel.Save = async function (states) {
+  console.log('Saving Control Panel')
+  if (!thisCodecStates) return
+  states = states ?? Object.keys(thisCodecStates)
+  await savePanel(states);
+  console.log('listening for control panel presses')
+  controlPanelSubscription = xapi.Event.UserInterface.Extensions.Widget.Action.on(event => {
+    if(!event.WidgetId.startsWith(BASE_PANEL_ID+'-changeState')) return
+    if(event.Type != 'pressed') return
+    const newState = event.Value;
+    console.log('Control Panel Press Event Detected. Setting State To:', newState)
+    DWS.Command.State.Set(newState);
+  });
 
-  const states = Object.keys(thisCodecStates)
-
-  savePanel(states);
-  
+  syncControlWidget();
 }
 
 
-DWS.Command.ControlPanel.Delete = function() {
-
-  
+DWS.Command.ControlPanel.Remove = async function () {
+  console.log('Remove Control Panel')
+  await xapi.Command.UserInterface.Extensions.Panel.Remove({ PanelId: BASE_PANEL_ID });
+  if(controlPanelSubscription) clearSubscriptions(controlPanelSubscription);
 }
 
 
@@ -763,13 +734,13 @@ DWS.Command.RequestStatus = (role) => {
  * Mutes the Ethernet Audio Input for the given stream name
  * @param {string} streamName - The name of the Ethernet Stream
  */
-DWS.Command.Audio.EthernetStream.Mute = function (streamName){ setEthernetMic(streamName, 'Off') }
+DWS.Command.Audio.EthernetStream.Mute = function (streamName) { setEthernetMic(streamName, 'Off') }
 
 /**
  * Unmutes the Ethernet Audio Input for the given stream name
  * @param {string} streamName - The name of the Ethernet Stream
  */
-DWS.Command.Audio.EthernetStream.Unmute = function (streamName){setEthernetMic(streamName, 'On') }
+DWS.Command.Audio.EthernetStream.Unmute = function (streamName) { setEthernetMic(streamName, 'On') }
 
 
 /**
@@ -832,20 +803,33 @@ DWS.Command.DoNotDisturb.Deactivatefme = () => {
 /**
  * Apply state for the current device
  */
-DWS.Command.ApplyState = async (stateName) => {
+DWS.Command.State.Set = async (stateName) => {
   if (!stateName) throw new Error('No state name specified')
   if (!thisCodecStates) throw new Error('No states defined for this device')
   const newState = thisCodecStates?.[stateName];
   if (!newState) throw new Error(`State [${stateName}] was not found for this device`)
-  await saveCombinedState(stateName);
-  clearSubscriptions(DWS.Subscriptions);
+  await DWS.Command.Memory.Write('State', stateName);
   console.log('Applying State:', stateName,);
+  clearSubscriptions(DWS.Subscriptions);
   thisCodecStates[stateName]();
+  syncControlWidget();
   return
 }
 
-DWS.Status.State = async function() {
-  return await getStoredState();
+DWS.Command.State.Restore = async function (defaultStateName) {
+  const recoveredState = await DWS.Command.Memory.Read('State');
+  if(recoveredState){
+    console.log('Restoring state:', recoveredState)
+    return DWS.Command.State.Set(recoveredState);
+  } else {
+    console.log('Stored State Not Found - Setting State To Default:', defaultStateName)
+    return DWS.Command.State.Set(defaultStateName);
+  }
+}
+
+DWS.Status.State.Get = async function () {
+  const recoveredState = await DWS.Command.Memory.Read('State');
+  return recoveredState
 }
 
 
@@ -892,7 +876,7 @@ DWS.Setup.Communication = async (config) => {
 
   thisCodecRole = self.role;
   DWS.Status.Role = self.role;
-  
+
   console.log('This Codecs Role:', thisCodecRole)
 
 
@@ -912,7 +896,7 @@ DWS.Setup.Communication = async (config) => {
     const [_panelId, role, eventType, var1, var2] = data.Value.split('-');
     switch (eventType) {
       case 'changeState':
-        applyState(value);
+        DWS.Command.State.Set(var1);
         break;
       case 'heartbeat':
         const existing = listeningHeartbeats?.[role]
@@ -920,7 +904,7 @@ DWS.Setup.Communication = async (config) => {
         //{ roleName: { timeout, fallbackState, minutes} ...}
         console.log(`Heartbeat Received From [${role}] - Resetting Timer`)
         clearTimeout(existing.timeout)
-        existing.timeout = setTimeout(DWS.Command.ApplyState, existing.minutes * 60 * 1000, existing.fallbackState)
+        existing.timeout = setTimeout(DWS.Command.State.Set, existing.minutes * 60 * 1000, existing.fallbackState)
         break;
     }
   })
