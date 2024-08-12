@@ -24,7 +24,7 @@
  * 
  * Full Readme, source code and license details for this macro are available 
  * on Github: https://github.com/wxsd-sales/divisible-workspaces-library
- * 
+ * x
  ********************************************************/
 
 import xapi from 'xapi';
@@ -62,6 +62,13 @@ let controlPanelSubscription;
 let messageEventCallbacks = {}; // { roleName: [callbacks] }
 
 
+let lockPanelText = {
+  Title: 'Combined Mode',
+  Text: 'This codec is in combined mode',
+  'Option.1': 'Please use main Touch Panel'
+}
+
+
 /* 
   Instantiate DWS Object, later exported
 */
@@ -70,8 +77,8 @@ const DWS = {
   Command: {
     Heartbeat: {
       Send: {
-        Start: {},
-        Stop: {},
+        // Start: {},
+        // Stop: {},
       },
       Listen: {
         Start: {},
@@ -99,6 +106,10 @@ const DWS = {
     State: {
       Set: {},
       Restore: {}
+    },
+    Send:{
+      Codecs: {},
+      All: {},
     },
     NotifyCodecs: {},
     RequestStatus: {},
@@ -251,7 +262,8 @@ function parseJSON(jsonText) {
  */
 function sendHeartbeat(targetRole) {
   console.log('Sending Hearbeat to role:', targetRole)
-  DWS.Command.NotifyCodecs(BASE_PANEL_ID + '-' + thisCodecRole + '-heartbeat', [targetRole])
+  //DWS.Command.NotifyCodecs(BASE_PANEL_ID + '-' + thisCodecRole + '-heartbeat', [targetRole])
+  DWS.Command.Send.Codecs([targetRole], thisCodecRole+'-heartbeat')
 }
 
 
@@ -338,6 +350,16 @@ async function identifySelf(codecs) {
 async function identifyRemoteCodecs(codecs) {
   const serial = await xapi.Status.SystemUnit.Hardware.Module.SerialNumber.get()
   return codecs.filter(codec => codec.serial != serial)
+}
+
+/**
+ * Returns filtered list of codecs 
+ * @param {array} codecs -  Array of Codecs from config
+ */
+function identifyCodesByRoleName(roles) {
+  if(!remoteCodecs) return
+  const lowerCaseRoles = roles.map(role => role.toLowerCase())
+  return remoteCodecs.filter(codec => lowerCaseRoles.includes(codec.role.toLowerCase()))
 }
 
 /**
@@ -463,8 +485,8 @@ async function syncControlWidget() {
   const currentState = await DWS.Status.State.Get();
   if(!currentState) return
   console.log('Setting Button Group To State:', currentState)
-  xapi.Command.UserInterface.Extensions.Widget.SetValue(
-    { Value: currentState, WidgetId: BASE_PANEL_ID+'-changeState' });
+  xapi.Command.UserInterface.Extensions.Widget.SetValue({ Value: currentState, WidgetId: BASE_PANEL_ID+'-changeState' })
+  .catch(error=>console.debug('Widget doesn\'t exists', error))
 }
 
 
@@ -490,6 +512,34 @@ function validate(object, schema) {
   if (errors.length > 0) {
     return errors.join(',')
   }
+}
+
+function validateCodecConfig(codecs){
+  if (!codecs) throw new Error('No config provided')
+  console.log('Validating Config')
+
+  // Validate Codecs, Authentication, Heartbeat
+
+  const codecSchema = {
+    role: function (value) {
+      return typeof value === 'string'
+    },
+    ip: function (value) {
+      return /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]\d|\d)){3}$/.test(value)
+    },
+    serial: function (value) {
+      return /^[a-zA-Z0-9]{11}$/.test(value);
+    }
+  };
+
+  for (let i = 0; i < codecs.length; i++) {
+    const codecErrors = validate(codecs[i], codecSchema)
+    if (codecErrors) {
+      throw new Error('Invalided Codec Config: ' + codecs[i] + ' - Invalid fields: ' + JSON.stringify(codecErrors))
+    }
+  }
+
+
 }
 
 function validateConfig(config) {
@@ -641,6 +691,31 @@ DWS.Command.NotifyCodecs = (message, roles) => {
   return codecs.forEach(codec => sendMessage(codec, message))
 }
 
+/**
+ * Sents a message to a single codec with matching role name
+ * @param {string[]} roles - The name of the codecs role
+ * @param {string} message - The message text to be sent
+ */
+DWS.Command.Send.Codecs = (roles, message) => {
+  
+  if (!remoteCodecs) {
+    console.log('No remote codecs available to notify')
+    return
+  }
+  if (!roles) {
+    console.log('No roles provided')
+    return
+  }
+  if (!message) {
+    console.log('No message provided')
+    return
+  }
+  const codecs = identifyCodesByRoleName([roles])
+
+  console.debug(`Sending Single Code Message: Roles [${role}] - Message [${message}] - Number of Codecs [${codec.length}]`)
+  return codecs.forEach(codec => sendMessage(codec, BASE_PANEL_ID + '+' + message))
+}
+
 
 
 /**
@@ -749,7 +824,7 @@ DWS.Command.Audio.EthernetStream.Unmute = function (streamName) { setEthernetMic
 DWS.Command.TouchPanel.Lock = () => {
   console.log('Locking Touch Panel')
   xapi.Config.UserInterface.Features.HideAll.set('True');
-  let alert = config.lockPanelText;
+  let alert = lockPanelText;
   alert.FeedbackId = BASE_PANEL_ID + '-lockPanel';
   xapi.Command.UserInterface.Message.Prompt.Display(alert)
   lockPanelSubscriptions.push(xapi.Event.UserInterface.Message.Prompt.on(event => processPanelClose(event, alert)))
@@ -843,13 +918,13 @@ DWS.Event.Codec.on = (role) => {
  * Validates and save provided config
  * @param {object} config - The name of the state to save
  */
-DWS.Setup.Communication = async (config) => {
+DWS.Setup.Codecs = async (codecs) => {
 
   console.log('DWS Setup Config Started')
 
   // Validate config and deactivate macro if incorrect
   try {
-    validateConfig(config)
+    validateCodecConfig(codecs)
   } catch (error) {
     throw deactivateMacro(error);
   }
@@ -857,16 +932,8 @@ DWS.Setup.Communication = async (config) => {
   console.log('Config Validated')
 
 
-  // Save the provided credentials to global variables
-  credentials = config.credentials;
-
-
-  setupUserAccount(credentials.username, credentials.password)
-
-  xapi.Config.HttpClient.AllowInsecureHTTPS.set('True');
-
   // Identify this device from provided codecs
-  const self = await identifySelf(config.codecs);
+  const self = await identifySelf(codecs);
 
   // If unable to identify self from config, disable macro
   if (!self) {
@@ -880,7 +947,7 @@ DWS.Setup.Communication = async (config) => {
   console.log('This Codecs Role:', thisCodecRole)
 
 
-  remoteCodecs = await identifyRemoteCodecs(config.codecs);
+  remoteCodecs = await identifyRemoteCodecs(codecs);
   console.debug('Remote Codecs:', JSON.stringify(remoteCodecs));
 
   // Generic listener for events
@@ -908,6 +975,40 @@ DWS.Setup.Communication = async (config) => {
         break;
     }
   })
+}
+
+/**
+ * Validates and save credentials config
+ * @param {object} communicationCredentials - Credentials Object
+ * @param {string} communicationCredentials.username - Common username
+ * @param {string} communicationCredentials.password - Common password
+ */
+DWS.Setup.Credentials = async (communicationCredentials) => {
+
+  // Save the provided credentials to global variables
+  credentials = communicationCredentials;
+
+
+  setupUserAccount(credentials.username, credentials.password)
+
+}
+
+/**
+ * Validates and save credentials config
+ * @param {object} panelText - Credentials Object
+ * @param {string} panelText.Title - Title of local panel text
+ * @param {string} panelText.Text  - Message Text displayed below title
+ * @param {string} panelText.['Option.1']  - Addtional text reused as an option button
+ */
+DWS.Setup.LockPanel = async (panelText) => {
+
+
+  lockPanelText = {
+    Title: 'Combined Mode',
+    Text: 'This codec is in combined mode',
+    'Option.1': 'Please use main Touch Panel'
+  };
+
 }
 
 DWS.Setup.States = (states) => {
