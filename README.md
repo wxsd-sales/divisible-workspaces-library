@@ -5,6 +5,41 @@
 
 The Divisible Workspaces (DWS) Macro Library is a suite of tools which provides commands and a state management features for handling common requirements for divisbile workspaces built using Cisco RoomOS Collaboration Devices.
 
+```mermaid
+%%{
+  init: {
+    'theme': 'base',
+    'themeVariables': {
+      'primaryColor': '#89cff0',
+      'primaryTextColor': '#fff',
+      'primaryBorderColor': '#7C0000',
+      'secondaryBorderColor': '#F8B229',
+      'lineColor': '#F8B229',
+      'secondaryColor': '#222222',
+      'tertiaryColor': '#e1e0df',
+      'tertiaryBorderColor': '#F8B229'
+    }
+  }
+}%%
+flowchart TB
+    subgraph one [Combined]
+        direction TB
+        subgraph CombinedRoomAB [Room A+B]
+            a1[Primary<br/>Codec]-->a2[Secondary<br/>Codec]
+            a2[Secondary<br/>Codec]-->a1[Primary<br/>Codec]
+        end
+    end
+
+    subgraph three [Divided]
+        direction TB
+        subgraph Room A
+            b1[Primary<br/>Codec]
+        end
+         subgraph Room B
+            b2[Secondary<br/>Codec]
+        end
+    end
+```
 
 ## Overview
 
